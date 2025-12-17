@@ -11,27 +11,27 @@ import array
 import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from plexapi.video import Episode
+from plexapi.video import Episode, Season, Show
 from generateGlobals import *
 from dotenv import load_dotenv
 
 load_dotenv()
 
-PLEX_URL = os.environ.get('PLEX_URL', 'https://192.168.0.59:32400/')  # Plex server URL. can also use for local server: http://localhost:32400
+PLEX_URL = os.environ.get('PLEX_URL', 'https://192.168.10.3:32400/')  # Plex server URL. can also use for local server: http://localhost:32400
 PLEX_TOKEN = os.environ.get('PLEX_TOKEN', 'WPz3dw8jK36NNbAKvcoY')  # Plex Authentication Token WPz3dw8jK36NNbAKvcoY  ### fxFNLRwxuHdMdusJ6rof
 PLEX_BIF_FRAME_INTERVAL = int(os.environ.get('PLEX_BIF_FRAME_INTERVAL', 5))  # Interval between preview images
 THUMBNAIL_QUALITY = int(os.environ.get('THUMBNAIL_QUALITY', 2))  # Preview image quality (2-6)
-PLEX_LOCAL_MEDIA_PATH = os.environ.get('PLEX_LOCAL_MEDIA_PATH', 'O:/')  # Local Plex media path
+PLEX_LOCAL_MEDIA_PATH = os.environ.get('PLEX_LOCAL_MEDIA_PATH', '\\\\192.168.10.3\\internal\\Android\\data\\com.plexapp.mediaserver.smb\\Plex Media Server\\Media\\localhost\\')  # Local Plex media path
 TMP_FOLDER = os.environ.get('TMP_FOLDER', 'G:/Temp/vpt')  # Temporary folder for preview generation
 PLEX_TIMEOUT = int(os.environ.get('PLEX_TIMEOUT', 60))  # Timeout for Plex API requests (seconds)
 
 # Path mappings for remote preview generation. # So you can have another computer generate previews for your Plex server
 # If you are running on your plex server, you can set both variables to ''
-PLEX_LOCAL_VIDEOS_PATH_MAPPING = os.environ.get('PLEX_LOCAL_VIDEOS_PATH_MAPPING', 'Y:')  # Local video path (Usually ending in "/Union/" for the script ###Change this to where the videos are relative to the encoder, or if merged use the local path to make it faaast  U:/
-PLEX_LOCAL_VIDEOS_PATH_ARRAY = os.environ.get('PLEX_LOCAL_VIDEOS_PATH_ARRAY', ['G:/LinuxShare/Union', 'P:/Union', 'K:/Union', 'L:/Union','W:/Union', 'Y:']) ### Sean Added for using backends instead of Union ###
-PLEX_VIDEOS_PATH_MAPPING = os.environ.get('PLEX_VIDEOS_PATH_MAPPING', '/mnt/Union')  # Plex server video path    the normal path for above  ^'//192.168.0.27/Union/' ^
-
-GPU_THREADS = int(os.environ.get('GPU_THREADS', 4))  # Number of GPU threads for preview generation
+PLEX_LOCAL_VIDEOS_PATH_MAPPING = os.environ.get('PLEX_LOCAL_VIDEOS_PATH_MAPPING', '\\\\172.17.1.77\\Union')  # Local video path (Usually ending in "/Union/" for the script ###Change this to where the videos are relative to the encoder, or if merged use the local path to make it faaast  U:/
+PLEX_LOCAL_VIDEOS_PATH_ARRAY = os.environ.get('PLEX_LOCAL_VIDEOS_PATH_ARRAY', ['G:/LinuxShare/Union','\\\\172.17.1.77\\Union']) ### Sean Added for using backends instead of Union ###
+PLEX_VIDEOS_PATH_MAPPING = os.environ.get('PLEX_VIDEOS_PATH_MAPPING', '/storage/082023447ECE764C/NVIDIA_SHIELD')  # Plex server video path    the normal path for above  ^'//192.168.0.27/Union/' ^
+PLEX_VIDEOS_PATH_ARRAY = os.environ.get('PLEX_VIDEOS_PATH_ARRAY', ['/storage/082023447ECE764C/NVIDIA_SHIELD','/sdcard/TV Shows', '/storage/ECF3-E640/NVIDIA_SHIELD'])
+GPU_THREADS = int(os.environ.get('GPU_THREADS', 6))  # Number of GPU threads for preview generation
 CPU_THREADS = int(os.environ.get('CPU_THREADS', 0))  # Number of CPU threads for preview generation
 
 # Set the timeout envvar for https://github.com/pkkid/python-plexapi
@@ -100,6 +100,7 @@ logger.add(
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
+
 def generate_images(video_file_param, output_folder):
     video_file = video_file_param.replace(PLEX_VIDEOS_PATH_MAPPING, PLEX_LOCAL_VIDEOS_PATH_MAPPING)
     ogFile = Path(video_file_param.replace(PLEX_VIDEOS_PATH_MAPPING, ""))
@@ -160,7 +161,7 @@ def generate_images(video_file_param, output_folder):
         frame_second = frame_no * PLEX_BIF_FRAME_INTERVAL
         os.rename(image, os.path.join(output_folder, '{:010d}.jpg'.format(frame_second)))
 
-    logger.info('Generated Video Preview for {} in {} HW={} TIME={}seconds SPEED={}x '.format(os.path.basename(video_file), str(video_file)[:2], hw, seconds, speed))
+    logger.info('Generated Video Preview for {} HW={} TIME={}seconds SPEED={}x '.format(video_file, hw, seconds, speed))
     logfile.unlink()
 
 def generate_bif(bif_filename, images_path):
@@ -203,22 +204,16 @@ def generate_bif(bif_filename, images_path):
         f.write(data)
 
     f.close()
-    ### Sean Additions ###
-    noTopDir = os.path.join(*(bif_filename.split("/")[1:]))
-    # print(f"bif = {bif_filename}")
-    shieldLocation = os.path.join("\\\\192.168.10.3\\internal\\Android\\data\\com.plexapp.mediaserver.smb\\Plex Media Server\\Media\\localhost\\",noTopDir)
-    os.makedirs(os.path.dirname(shieldLocation),exist_ok=True)
-    shutil.copy(bif_filename, shieldLocation)
 
 
 def process_item(item_key):
     sess = requests.Session()
     sess.verify = False
     plex = PlexServer(PLEX_URL, PLEX_TOKEN, timeout=PLEX_TIMEOUT, session=sess)
-
     data = plex.query('{}/tree'.format(item_key))
 
     for media_part in data.findall('.//MediaPart'):
+        foundMatch = False
         if 'hash' in media_part.attrib:
             # Filter Processing by HDD Path
             if len(sys.argv) > 1:
@@ -229,11 +224,16 @@ def process_item(item_key):
             if 'PLEX_LOCAL_VIDEOS_PATH_ARRAY' in globals():
                 if len(PLEX_LOCAL_VIDEOS_PATH_ARRAY) > 0:
                     for local_path in PLEX_LOCAL_VIDEOS_PATH_ARRAY:
-                        if os.path.isfile(media_file.replace(PLEX_VIDEOS_PATH_MAPPING, local_path)):
-                            global PLEX_LOCAL_VIDEOS_PATH_MAPPING
-                            PLEX_LOCAL_VIDEOS_PATH_MAPPING = local_path
-                            # logger.info('PLEX_LOCAL_VIDEOS_PATH_MAPPING = '+PLEX_LOCAL_VIDEOS_PATH_MAPPING)
-                            break
+                        for other_path in PLEX_VIDEOS_PATH_ARRAY:
+                            logger.info('Checking if {} exists'.format(media_file.replace(other_path, local_path)))                           
+                            if os.path.isfile(media_file.replace(other_path, local_path)):
+                                logger.info('Found matching path {} for {}'.format(local_path, media_file))
+                                global PLEX_LOCAL_VIDEOS_PATH_MAPPING
+                                global PLEX_VIDEOS_PATH_MAPPING
+                                PLEX_LOCAL_VIDEOS_PATH_MAPPING = local_path
+                                PLEX_VIDEOS_PATH_MAPPING = other_path
+                                foundMatch = True
+                                break
                             
             media_file = media_file.replace(PLEX_VIDEOS_PATH_MAPPING, PLEX_LOCAL_VIDEOS_PATH_MAPPING) ### This line was added by sean.
             # logger.info('media file = '+media_file)
@@ -284,54 +284,63 @@ def process_item(item_key):
                 finally:
                     if os.path.exists(tmp_path):
                         shutil.rmtree(tmp_path)
-
+            else:
+                logger.info('Skipping as bif already exists or tmp path exists {}'.format(media_file))
+                continue
 
 def run():
+    ###-- V2.0 --###
     # Ignore SSL Errors
     sess = requests.Session()
     sess.verify = False
-    if os.path.exists("G:/VPT-Processing/"):
-        shutil.rmtree("G:/VPT-Processing/")
+
+    # Clean up old processing directory
+    shutil.rmtree("G:/VPT-Processing/") if os.path.exists("G:/VPT-Processing/") else None
+
     plex = PlexServer(PLEX_URL, PLEX_TOKEN, session=sess)
 
-    if runType == "Currently Playing":
-        for ep in plex.library.onDeck():
-            if isinstance(ep, Episode):
-                unwatched = ep.season().unwatched()
-                media = [m.key for m in unwatched]
-                logger.info('Got {} media files for library {}'.format(len(media), ep.grandparentTitle))
-                with Progress(SpinnerColumn(), *Progress.get_default_columns(), MofNCompleteColumn(), console=console) as progress:
-                    with ProcessPoolExecutor(max_workers=CPU_THREADS + GPU_THREADS) as process_pool:
-                        futures = [process_pool.submit(process_item, key) for key in media]
-                        for future in progress.track(futures):
-                            future.result()
-        
+    def process_media(media):
+        logger.info(f'Processing {len(media)} media files for {title}')
+        with Progress(SpinnerColumn(), *Progress.get_default_columns(), MofNCompleteColumn(), console=console) as progress:
+            with ProcessPoolExecutor(max_workers=CPU_THREADS + GPU_THREADS) as pool:
+                futures = [pool.submit(process_item, key) for key in media]
+                for future in progress.track(futures):
+                    future.result()
+                    
+                    # this is in global!!
+    if manualList != []:
+        # logger.info(f'Manual List - {manualList}')
+        for item in manualList:
+            # logger.info(f'item - {item}')
+            if isinstance(item, Episode):
+                print("Episode")
+                title = item.grandparentTitle
+                process_media([m.key for m in item])   
+            elif isinstance(item, Season):
+                title = item.parentTitle
+                print("Season")
+                process_media([m.key for m in item])   
+            elif isinstance(item, Show):
+                title = item.title
+                print("Show")
+                process_media([m.key for m in item.episodes()])   
+    elif runType == "Currently Playing":
+        for item in plex.library.onDeck():
+            if isinstance(item, Episode):
+                title = item.grandparentTitle
+                process_media([m.key for m in item.season().unwatched()])
     else:
         for section in plex.library.sections():
-            logger.info('Getting the media files from library \'{}\''.format(section.title))
-            
             if section.METADATA_TYPE == 'episode':
-                media = []
-                allEps = section.search(libtype='episode')
-                for i in allEps:
-                    if i.hasPreviewThumbnails != True :
-                        media.append(i.key)
-                # media = [m.key for m in section.search(libtype='episode')] ###Previous before sean edits above
+                title=section
+                process_media([m.key for m in section.search(libtype='episode')])
             elif section.METADATA_TYPE == 'changedSoNoMovies':
-                media = [m.key for m in section.search()]
+                process_media([m.key for m in section.search()])
             else:
-                logger.info('Skipping library {} as \'{}\' is unsupported'.format(section.title, section.METADATA_TYPE))
-                continue
-            logger.info('Got {} media files for Series :  {}'.format(len(media), section.title))
-            with Progress(SpinnerColumn(), *Progress.get_default_columns(), MofNCompleteColumn(), console=console) as progress:
-                with ProcessPoolExecutor(max_workers=CPU_THREADS + GPU_THREADS) as process_pool:
-                    futures = [process_pool.submit(process_item, key) for key in media]
-                    for future in progress.track(futures):
-                        future.result()
+                logger.info(f'Skipping {section.title}, unsupported type: {section.METADATA_TYPE}')
 
 
-
-if __name__ == '__main__':
+def main():
     if not os.path.exists(PLEX_LOCAL_MEDIA_PATH):
         logger.error(
             '%s does not exist, please edit PLEX_LOCAL_MEDIA_PATH environment variable' % PLEX_LOCAL_MEDIA_PATH)
@@ -354,3 +363,51 @@ if __name__ == '__main__':
     finally:
         if os.path.isdir(TMP_FOLDER):
             shutil.rmtree(TMP_FOLDER)
+
+
+if __name__ == '__main__':
+    main()
+    
+
+
+
+
+
+# def run():
+###-- ORIGIN --###
+#     # Ignore SSL Errors
+#     sess = requests.Session()
+#     sess.verify = False
+#     if os.path.exists("G:/VPT-Processing/"):
+#         shutil.rmtree("G:/VPT-Processing/")
+#     plex = PlexServer(PLEX_URL, PLEX_TOKEN, session=sess)
+
+#     if runType == "Currently Playing":
+#         for ep in plex.library.onDeck():
+#             if isinstance(ep, Episode):
+#                 unwatched = ep.season().unwatched()
+#                 media = [m.key for m in unwatched]
+#                 logger.info('Got {} media files for library {}'.format(len(media), ep.grandparentTitle))
+#                 with Progress(SpinnerColumn(), *Progress.get_default_columns(), MofNCompleteColumn(), console=console) as progress:
+#                     with ProcessPoolExecutor(max_workers=CPU_THREADS + GPU_THREADS) as process_pool:
+#                         futures = [process_pool.submit(process_item, key) for key in media]
+#                         for future in progress.track(futures):
+#                             future.result()
+        
+#     else:
+#         for section in plex.library.sections():
+#             logger.info('Getting the media files from library \'{}\''.format(section.title))
+            
+#             if section.METADATA_TYPE == 'episode':
+#                 media = [m.key for m in section.search(libtype='episode')]
+#             elif section.METADATA_TYPE == 'changedSoNoMovies':
+#                 media = [m.key for m in section.search()]
+#             else:
+#                 logger.info('Skipping library {} as \'{}\' is unsupported'.format(section.title, section.METADATA_TYPE))
+#                 continue
+#             logger.info('Got {} media files for Series :  {}'.format(len(media), section.title))
+#             with Progress(SpinnerColumn(), *Progress.get_default_columns(), MofNCompleteColumn(), console=console) as progress:
+#                 with ProcessPoolExecutor(max_workers=CPU_THREADS + GPU_THREADS) as process_pool:
+#                     futures = [process_pool.submit(process_item, key) for key in media]
+#                     for future in progress.track(futures):
+#                         future.result()
