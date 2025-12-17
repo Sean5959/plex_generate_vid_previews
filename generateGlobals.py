@@ -114,24 +114,26 @@ def fetch_manual_list():
                         WM.append(ep)
     
     for r, w, z1, z2, z3, z4, z5, z6 in zip_longest(RCLONE, WM, ZPOOL1, ZPOOL2, ZPOOL3, ZPOOL4, ZPOOL5, ZPOOL6, fillvalue=None):
+        sublist = []
         if r is not None:
-            result_list.append(r)
+            sublist.append(r)
         if w is not None:
-            result_list.append(w)
+            sublist.append(w)
         if z1 is not None:
-            result_list.append(z1)
+            sublist.append(z1)
         if z2 is not None:
-            result_list.append(z2)
+            sublist.append(z2)
         if z3 is not None:
-            result_list.append(z3)
+            sublist.append(z3)
         if z4 is not None:
-            result_list.append(z4)
+            sublist.append(z4)
         if z5 is not None:
-            result_list.append(z5)
+            sublist.append(z5)
         if z6 is not None:
-            result_list.append(z6)
+            sublist.append(z6)
+        result_list.append(sublist)
             
     for item in result_list:
-        print(f"Added to manual list: {item.title} - {item.seasonEpisode} - {item.media[0].parts[0].file}")
-    exit()
+        print(f"Added to manual list: {item}")
+    # exit()
     return result_list
