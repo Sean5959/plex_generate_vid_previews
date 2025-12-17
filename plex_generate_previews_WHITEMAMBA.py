@@ -94,8 +94,12 @@ def generate_images(video_file_param, output_folder):
 
     # Check if we have a HDR Format. Note: Sometimes it can be returned as "None" (string) hence the check for None type or "None" (String)
     if media_info.video_tracks:
-        if media_info.video_tracks[0].hdr_format != "None" and media_info.video_tracks[0].hdr_format is not None:
+        is_hdr = media_info.video_tracks[0].hdr_format != "None" and media_info.video_tracks[0].hdr_format is not None
+        
+        if is_hdr:
             vf_parameters = "fps=fps={}:round=up,zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,scale=w=320:h=240:force_original_aspect_ratio=decrease".format(round(1 / PLEX_BIF_FRAME_INTERVAL, 6))
+        else:
+            vf_parameters = "fps=fps={}:round=up,scale=w=320:h=240:force_original_aspect_ratio=decrease".format(round(1 / PLEX_BIF_FRAME_INTERVAL, 6))
 
     args = [
         FFMPEG_PATH, "-loglevel", "info", "-skip_frame:v", "nokey", "-threads:0", "1", "-i",
@@ -115,7 +119,12 @@ def generate_images(video_file_param, output_folder):
             args.insert(6, "cuda")
             args.insert(5, "-hwaccel_output_format")
             args.insert(6, "cuda")
-            vf_parameters = f"hwdownload,format=nv12,{vf_parameters}"
+            if is_hdr:
+                # HDR with hardware - use p010le for HEVC/H.264
+                vf_parameters = f"hwdownload,format=p010le,{vf_parameters}"
+            else:
+                # Non-HDR with hardware - use nv12
+                vf_parameters = f"hwdownload,format=nv12,{vf_parameters}"
             
     args.insert(-1, "-vf")
     args.insert(-1, vf_parameters)
@@ -214,6 +223,7 @@ def process_item(item_key):
             media_file = media_part.attrib['file']
             if 'PLEX_LOCAL_VIDEOS_PATH_ARRAY' in globals():
                 if len(PLEX_LOCAL_VIDEOS_PATH_ARRAY) > 0:
+                    found=False
                     for local_path in PLEX_LOCAL_VIDEOS_PATH_ARRAY:
                         for other_path in PLEX_VIDEOS_PATH_ARRAY:
                             # logger.info('Checking if {} exists'.format(media_file.replace(other_path, local_path)))                           
@@ -224,7 +234,10 @@ def process_item(item_key):
                                 PLEX_LOCAL_VIDEOS_PATH_MAPPING = local_path
                                 PLEX_VIDEOS_PATH_MAPPING = other_path
                                 # logger.info('PLEX_LOCAL_VIDEOS_PATH_MAPPING = '+PLEX_LOCAL_VIDEOS_PATH_MAPPING)
+                                found=True
                                 break
+                        if found:
+                            break
                             
             media_file = media_file.replace(PLEX_VIDEOS_PATH_MAPPING, PLEX_LOCAL_VIDEOS_PATH_MAPPING) ### This line was added by sean.
             # logger.info('media file = '+media_file)
@@ -282,7 +295,7 @@ def process_item(item_key):
                 continue
 
 def run():
-    ###-- V2.0 --###
+    ###-- V2.0 with Parallel Sublist Processing --###
     # Ignore SSL Errors
     sess = requests.Session()
     sess.verify = False
@@ -292,57 +305,70 @@ def run():
 
     plex = PlexServer(PLEX_URL, PLEX_TOKEN, session=sess)
 
-    def process_media(media):
-        logger.info(f'Processing {len(media)} media files for {title}')
+    def process_media(media, sublist_index, sublist_name, workers=CPU_THREADS + GPU_THREADS):
+        """Process media for a specific sublist"""
+        if not media:
+            return
+            
+        logger.info(f'Processing {len(media)} media files from {sublist_name} (Sublist {sublist_index})')
+            
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(process_item, key) for key in media]
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    logger.info('Generated Video Preview for {} on {} HW={} TIME={}seconds SPEED={}x'.format(
+                        result['video_file'], sublist_name, result['hw'], result['seconds'], result['speed']))
+                progress.advance(task)
+                progress.refresh()
+
+
+    if runType != "Currently Playing" and runType != "Full":
+        from generateGlobals import fetch_result_list
+        result_list = fetch_result_list()
+        lenResultList = sum(1 for sublist in result_list if sublist)
+        lenSubLists = sum(len(sublist) for sublist in result_list if sublist)
+        
+        # Process all sublists in parallel
+        sublist_names = ['RCLONE', 'WM', 'ZPOOL1', 'ZPOOL2', 'ZPOOL3', 'ZPOOL4', 'ZPOOL5', 'ZPOOL6']
+        
+        from concurrent.futures import ThreadPoolExecutor
         with Progress(SpinnerColumn(), *Progress.get_default_columns(), MofNCompleteColumn(), console=console) as progress:
-            task = progress.add_task("Working...", total=len(media))
-            with ProcessPoolExecutor(max_workers=CPU_THREADS + GPU_THREADS) as pool:
-                futures = [pool.submit(process_item, key) for key in media]
-                for future in as_completed(futures):
-                    result = future.result()  # Get result (or raise exception if failed)
-                    if result:  # Only log if we have preview generation data
-                        logger.info('Generated Video Preview for {} HW={} TIME={}seconds SPEED={}x'.format(
-                            result['video_file'], result['hw'], result['seconds'], result['speed']))
+            task = progress.add_task(f"Working...", total=lenSubLists)
+            with ThreadPoolExecutor(max_workers=lenResultList) as executor:
+                futures = []
+                for idx, sublist in enumerate(result_list):
+                    if sublist:  # Only submit non-empty sublists
+                        future = executor.submit(
+                            process_media,
+                            [m.key for m in sublist],
+                            idx,
+                            sublist_names[idx] if idx < len(sublist_names) else f'Sublist {idx}',
+                            workers = 1
+                        )
+                        futures.append(future)
+                
+                # Wait for all to complete
+                for future in futures:
+                    future.result()
                     progress.advance(task)
                     progress.refresh()
-                    
-                    # this is in global!!
-    if runType != "Currently Playing" and runType != "Full":
-        from generateGlobals import fetch_manual_list
-        manualList = fetch_manual_list()                
-                    
-    if manualList != []:
-        # logger.info(f'Manual List - {manualList}')
-        for item in manualList:
-            # logger.info(f'item - {item}')
-            if isinstance(item, list):
-                logger.info(f'Processing list of {len(item)} episodes for {item[0].grandparentTitle}')
-                title = item[0].grandparentTitle
-                process_media([m.key for m in item]) 
-            elif isinstance(item, Episode):
-                logger.info(f'Processing episode {item.title} for {item.grandparentTitle}')
-                title = item.grandparentTitle
-                process_media([m.key for m in item])   
-            elif isinstance(item, Season):
-                title = item.parentTitle
-                logger.info(f'Processing season {item.title} for {item.parentTitle}')
-                process_media([m.key for m in item])   
-            elif isinstance(item, Show):
-                title = item.title
-                logger.info(f'Processing show {item.title}')
-                process_media([m.key for m in item.episodes()])   
+                
     elif runType == "Currently Playing":
         for item in plex.library.onDeck():
             if isinstance(item, Episode):
                 title = item.grandparentTitle
-                process_media([m.key for m in item.season().unwatched()])
+                process_media([m.key for m in item.season().unwatched()], 0, 'Currently Playing')
     else:
         for section in plex.library.sections():
             if section.METADATA_TYPE == 'episode':
-                title=section
-                process_media([m.key for m in section.search(libtype='episode')])
+                title = section.title
+                media = [m.key for m in section.search(libtype='episode')]
+                process_media(media, 0, section.title)
             elif section.METADATA_TYPE == 'changedSoNoMovies':
-                process_media([m.key for m in section.search()])
+                title = section.title
+                media = [m.key for m in section.search()]
+                process_media(media, 0, section.title)
             else:
                 logger.info(f'Skipping {section.title}, unsupported type: {section.METADATA_TYPE}')
 

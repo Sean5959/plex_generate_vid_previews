@@ -19,8 +19,9 @@ PLEX_TIMEOUT = int(os.environ.get('PLEX_TIMEOUT', 60))  # Timeout for Plex API r
 # Path mappings for remote preview generation. # So you can have another computer generate previews for your Plex server
 # If you are running on your plex server, you can set both variables to ''
 PLEX_LOCAL_VIDEOS_PATH_MAPPING = os.environ.get('PLEX_LOCAL_VIDEOS_PATH_MAPPING', '\\\\172.17.1.77\\Union')  # Local video path (Usually ending in "/Union/" for the script ###Change this to where the videos are relative to the encoder, or if merged use the local path to make it faaast  U:/
-PLEX_LOCAL_VIDEOS_PATH_ARRAY = os.environ.get('PLEX_LOCAL_VIDEOS_PATH_ARRAY', ['G:/LinuxShare/Union','\\\\172.17.1.77\\Union']) ### Sean Added for using backends instead of Union ###
-PLEX_VIDEOS_PATH_MAPPING = os.environ.get('PLEX_VIDEOS_PATH_MAPPING', '/media/sean/1tb1/Union/')  # Plex server video path    the normal path for above  ^'//192.168.0.27/Union/' ^
+PLEX_LOCAL_VIDEOS_PATH_ARRAY = os.environ.get('PLEX_LOCAL_VIDEOS_PATH_ARRAY', ['G:/LinuxShare/Union', 'U:/Union', 'V:/Union', 'W:/Union', 
+                                                                               'X:/Union', 'Y:/Union', 'Z:/Union', '\\\\172.17.1.77\\Union']) ### Sean Added for using backends instead of Union ###
+PLEX_VIDEOS_PATH_MAPPING = os.environ.get('PLEX_VIDEOS_PATH_MAPPING', '/media/sean/1tb1/Union/')  # Plex server video path    the normal path for above         ^'//192.168.0.27/Union/' ^
 PLEX_VIDEOS_PATH_ARRAY = os.environ.get('PLEX_VIDEOS_PATH_ARRAY', ['/zfs/zpool1/media_root/Union','/zfs/zpool2/media_root/Union', 
                                         '/zfs/zpool3/media_root/Union','/zfs/zpool4/media_root/Union', '/zfs/zpool5/media_root/Union',
                                         '/zfs/zpool6/media_root/Union','/rclone/Crypts/Crypt-Mum/Union', '/rclone/Crypts/Crypt-Dad/Union',
@@ -49,20 +50,28 @@ guidVars = {"episode" : "plex://episode/5d9c133202391c001f5ff718",
 runType = "Other"
 # runType = "Full"
 
-def fetch_manual_list():
+def fetch_result_list():
     """Fetch unwatched items from WMPlex based on shieldPlex shows"""
     mediaItems = shieldPlex.library.search(libtype='show')
     n=0
     for item in mediaItems:
         print(f"[{n}]: {item.title}")
         n += 1
-    picked = input("Pick a number from the list above: ")
+    picked = input("Pick number(s) from the list above: ")
     if picked != "":
         if picked.upper() == "EXIT" or picked.upper() == "QUIT" or picked.upper() == "Q" or picked.upper() == "X":
             exit()  # Keep full list
     try :
-        picked = int(picked)
-        mediaItems = [mediaItems[picked]]
+        if ',' in picked:
+            for i in picked.split(','):
+                i = int(i)
+                if 'selected_items' not in locals():
+                    selected_items = []
+                selected_items.append(mediaItems[i])
+            mediaItems = selected_items
+        else :
+            picked = int(picked)
+            mediaItems = [mediaItems[picked]]
     except :
         print("Invalid input, proceeding with full list")   
     
@@ -113,26 +122,27 @@ def fetch_manual_list():
                     else:
                         WM.append(ep)
     
-    for r, w, z1, z2, z3, z4, z5, z6 in zip_longest(RCLONE, WM, ZPOOL1, ZPOOL2, ZPOOL3, ZPOOL4, ZPOOL5, ZPOOL6, fillvalue=None):
-        sublist = []
-        if r is not None:
-            sublist.append(r)
-        if w is not None:
-            sublist.append(w)
-        if z1 is not None:
-            sublist.append(z1)
-        if z2 is not None:
-            sublist.append(z2)
-        if z3 is not None:
-            sublist.append(z3)
-        if z4 is not None:
-            sublist.append(z4)
-        if z5 is not None:
-            sublist.append(z5)
-        if z6 is not None:
-            sublist.append(z6)
-        result_list.append(sublist)
-            
+    # for r, w, z1, z2, z3, z4, z5, z6 in zip_longest(RCLONE, WM, ZPOOL1, ZPOOL2, ZPOOL3, ZPOOL4, ZPOOL5, ZPOOL6, fillvalue=None):
+    #     sublist = []
+    #     if r is not None:
+    #         sublist.append(r)
+    #     if w is not None:
+    #         sublist.append(w)
+    #     if z1 is not None:
+    #         sublist.append(z1)
+    #     if z2 is not None:
+    #         sublist.append(z2)
+    #     if z3 is not None:
+    #         sublist.append(z3)
+    #     if z4 is not None:
+    #         sublist.append(z4)
+    #     if z5 is not None:
+    #         sublist.append(z5)
+    #     if z6 is not None:
+    #         sublist.append(z6)
+    #     result_list.append(sublist)
+  
+    result_list = [RCLONE, WM , ZPOOL1 , ZPOOL2 , ZPOOL3 , ZPOOL4 , ZPOOL5 , ZPOOL6]          
     for item in result_list:
         print(f"Added to manual list: {item}")
     # exit()
